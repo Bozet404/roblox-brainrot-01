@@ -1,10 +1,12 @@
--- Brainrot Blast: builds the whole 3D world at runtime.
--- Plaza, trail, spawn gate, eight player bases, trees, lamps and the
--- tsunami wave are all plain Parts created here, so the place file only
--- needs a baseplate and the scripts. Nothing in this module touches money.
+-- Brainrot Blast — the 3D world, built from Parts when the server starts.
+-- A green plaza, a sandy trail from the north gate to the south end, eight
+-- player bases on a ring around the plaza, trees, lamps, bushes and the
+-- tsunami wave. The place file itself only carries a baseplate; everything
+-- a player sees here is made by this module. It never touches money.
 
 local World = {}
 
+-- One colour per base, in join order.
 local BASE_COLORS = {
 	Color3.fromRGB(255, 120, 120),
 	Color3.fromRGB(120, 180, 255),
@@ -23,33 +25,48 @@ local TREE_SPOTS = {
 	Vector3.new(68, 0, -8),
 }
 
+local BUSH_SPOTS = {
+	Vector3.new(-30, 0, -30), Vector3.new(32, 0, -38), Vector3.new(-60, 0, 38),
+	Vector3.new(60, 0, -38), Vector3.new(-18, 0, 62), Vector3.new(20, 0, 66),
+}
+
 local LAMP_SPOTS = {
 	Vector3.new(-14, 0, -20), Vector3.new(14, 0, -20),
 	Vector3.new(-14, 0, 20), Vector3.new(14, 0, 20),
 	Vector3.new(-8, 0, -45), Vector3.new(8, 0, 45),
 }
 
-local function part(name, size, position, color, material)
+-- spec: { name, size, pos, color, material, shape, collide }
+local function makePart(parent, spec)
 	local p = Instance.new("Part")
-	p.Name = name
+	p.Name = spec.name
 	p.Anchored = true
-	p.CanCollide = true
-	p.Size = size
-	p.Position = position
-	p.Color = color
-	p.Material = material or Enum.Material.SmoothPlastic
+	p.CanCollide = spec.collide ~= false
+	p.Size = spec.size
+	p.Position = spec.pos
+	p.Color = spec.color
+	p.Material = spec.material or Enum.Material.SmoothPlastic
+	if spec.shape then
+		p.Shape = spec.shape
+	end
 	p.TopSurface = Enum.SurfaceType.Smooth
 	p.BottomSurface = Enum.SurfaceType.Smooth
+	p.Parent = parent
 	return p
 end
 
-local function makeSignPole(parent, position, titleText)
-	local pole = part("SignPole", Vector3.new(0.6, 7, 0.6), position + Vector3.new(0, 3.5, 0),
-		Color3.fromRGB(90, 60, 30), Enum.Material.Wood)
-	pole.Parent = parent
-	local board = part("SignBoard", Vector3.new(9, 3, 0.6), position + Vector3.new(0, 7.5, 0),
-		Color3.fromRGB(60, 40, 90), Enum.Material.WoodPlanks)
-	board.Parent = parent
+-- A wooden pole with a board that shows one line of text to the plaza.
+local function makeSign(parent, pos, text)
+	makePart(parent, {
+		name = "SignPole", size = Vector3.new(0.6, 7, 0.6),
+		pos = pos + Vector3.new(0, 3.5, 0),
+		color = Color3.fromRGB(90, 60, 30), material = Enum.Material.Wood,
+	})
+	local board = makePart(parent, {
+		name = "SignBoard", size = Vector3.new(9, 3, 0.6),
+		pos = pos + Vector3.new(0, 7.5, 0),
+		color = Color3.fromRGB(60, 40, 90), material = Enum.Material.WoodPlanks,
+	})
 	local gui = Instance.new("SurfaceGui")
 	gui.Face = Enum.NormalId.Front
 	gui.Parent = board
@@ -57,7 +74,7 @@ local function makeSignPole(parent, position, titleText)
 	label.Name = "Title"
 	label.Size = UDim2.fromScale(1, 1)
 	label.BackgroundTransparency = 1
-	label.Text = titleText
+	label.Text = text
 	label.TextColor3 = Color3.fromRGB(255, 240, 120)
 	label.TextScaled = true
 	label.Font = Enum.Font.FredokaOne
@@ -65,10 +82,94 @@ local function makeSignPole(parent, position, titleText)
 	return label
 end
 
-function World.build()
-	local world = {}
-	world.bases = {}
+local function makeTree(parent, spot)
+	makePart(parent, {
+		name = "Trunk", size = Vector3.new(1.5, 6, 1.5),
+		pos = spot + Vector3.new(0, 3, 0),
+		color = Color3.fromRGB(120, 80, 40), material = Enum.Material.Wood,
+	})
+	makePart(parent, {
+		name = "Leaves", size = Vector3.new(7, 7, 7),
+		pos = spot + Vector3.new(0, 8, 0),
+		color = Color3.fromRGB(40, 160, 60), material = Enum.Material.Grass,
+		shape = Enum.PartType.Ball, collide = false,
+	})
+end
 
+local function makeLamp(parent, spot)
+	makePart(parent, {
+		name = "LampPole", size = Vector3.new(0.6, 6, 0.6),
+		pos = spot + Vector3.new(0, 3, 0),
+		color = Color3.fromRGB(60, 60, 60), material = Enum.Material.Metal,
+	})
+	makePart(parent, {
+		name = "LampBulb", size = Vector3.new(1.6, 1.6, 1.6),
+		pos = spot + Vector3.new(0, 6.5, 0),
+		color = Color3.fromRGB(255, 240, 150), material = Enum.Material.Neon,
+		collide = false,
+	})
+end
+
+-- Builds one base: floor, back wall, six neon slot pads in two rows of
+-- three, a SpawnLocation and a name sign. Returns the base's live data.
+local function makeBase(folder, index, center, angle)
+	local color = BASE_COLORS[index]
+	local baseFolder = Instance.new("Folder")
+	baseFolder.Name = "Base" .. index
+	baseFolder.Parent = folder
+
+	makePart(baseFolder, {
+		name = "Floor", size = Vector3.new(18, 1, 18), pos = center,
+		color = color,
+	})
+	-- Low wall on the far side so the base reads as a home zone.
+	local out = Vector3.new(math.cos(angle), 0, math.sin(angle))
+	makePart(baseFolder, {
+		name = "BackWall", size = Vector3.new(18, 5, 1),
+		pos = center - out * 8.5 + Vector3.new(0, 2.5, 0), color = color,
+	})
+
+	-- Slot pads: across the base (sideways) and along it (toward plaza).
+	local right = Vector3.new(-math.sin(angle), 0, math.cos(angle))
+	local slots = {}
+	for row = 1, 2 do
+		for col = 1, 3 do
+			local slotIndex = (row - 1) * 3 + col
+			local padPos = center + right * ((col - 2) * 5) + out * ((row - 1) * 5 - 2)
+			makePart(baseFolder, {
+				name = "SlotPad" .. slotIndex, size = Vector3.new(4, 0.4, 4),
+				pos = padPos + Vector3.new(0, 0.7, 0),
+				color = Color3.fromRGB(255, 255, 255), material = Enum.Material.Neon,
+			})
+			slots[slotIndex] = padPos + Vector3.new(0, 1.5, 0)
+		end
+	end
+
+	local spawn = Instance.new("SpawnLocation")
+	spawn.Name = "Spawn" .. index
+	spawn.Anchored = true
+	spawn.Size = Vector3.new(8, 1, 8)
+	spawn.Position = center + Vector3.new(0, 0.5, 0)
+	spawn.Color = color
+	spawn.Material = Enum.Material.SmoothPlastic
+	spawn.TopSurface = Enum.SurfaceType.Smooth
+	spawn.BottomSurface = Enum.SurfaceType.Smooth
+	spawn.Neutral = false
+	spawn.AllowTeamChangeOnTouch = false
+	spawn.Parent = baseFolder
+
+	local signLabel = makeSign(baseFolder, center - out * 10, "BASE " .. index)
+
+	return {
+		center = center + Vector3.new(0, 0.5, 0),
+		slots = slots,
+		spawn = spawn,
+		signLabel = signLabel,
+	}
+end
+
+function World.build()
+	local world = { bases = {} }
 	local workspace = game:GetService("Workspace")
 
 	local folder = Instance.new("Folder")
@@ -76,120 +177,62 @@ function World.build()
 	folder.Parent = workspace
 	world.folder = folder
 
-	-- Central plaza: a flat green square the trail crosses.
-	local plaza = part("Plaza", Vector3.new(72, 1, 72), Vector3.new(0, 0, 0),
-		Color3.fromRGB(90, 200, 90), Enum.Material.Grass)
-	plaza.Parent = folder
+	-- Central plaza the trail crosses, then the trail itself.
+	makePart(folder, {
+		name = "Plaza", size = Vector3.new(72, 1, 72), pos = Vector3.new(0, 0, 0),
+		color = Color3.fromRGB(90, 200, 90), material = Enum.Material.Grass,
+	})
+	makePart(folder, {
+		name = "Trail", size = Vector3.new(10, 0.6, 176), pos = Vector3.new(0, 0.3, 0),
+		color = Color3.fromRGB(230, 200, 130), material = Enum.Material.Sand,
+	})
 
-	-- The trail: brainrots walk from the north gate to the south end on it.
-	local trail = part("Trail", Vector3.new(10, 0.6, 176), Vector3.new(0, 0.3, 0),
-		Color3.fromRGB(230, 200, 130), Enum.Material.Sand)
-	trail.Parent = folder
+	-- Spawn gate at the north end of the trail (z = -82).
+	makePart(folder, {
+		name = "GatePillar", size = Vector3.new(2, 12, 2), pos = Vector3.new(-7, 6, -82),
+		color = Color3.fromRGB(150, 60, 200), material = Enum.Material.Neon,
+	})
+	makePart(folder, {
+		name = "GatePillar", size = Vector3.new(2, 12, 2), pos = Vector3.new(7, 6, -82),
+		color = Color3.fromRGB(150, 60, 200), material = Enum.Material.Neon,
+	})
+	makePart(folder, {
+		name = "GateBeam", size = Vector3.new(16, 2, 2), pos = Vector3.new(0, 12, -82),
+		color = Color3.fromRGB(255, 220, 90), material = Enum.Material.Neon,
+	})
+	makeSign(folder, Vector3.new(0, 0, -88), "BRAINROT GATE")
 
-	-- Spawn gate at the north end of the trail.
-	local gateLeft = part("GatePillar", Vector3.new(2, 12, 2), Vector3.new(-7, 6, -82),
-		Color3.fromRGB(150, 60, 200), Enum.Material.Neon)
-	gateLeft.Parent = folder
-	local gateRight = part("GatePillar", Vector3.new(2, 12, 2), Vector3.new(7, 6, -82),
-		Color3.fromRGB(150, 60, 200), Enum.Material.Neon)
-	gateRight.Parent = folder
-	local gateTop = part("GateBeam", Vector3.new(16, 2, 2), Vector3.new(0, 12, -82),
-		Color3.fromRGB(255, 220, 90), Enum.Material.Neon)
-	gateTop.Parent = folder
-	makeSignPole(folder, Vector3.new(0, 0, -88), "BRAINROT GATE")
-
-	-- Eight bases on a ring around the plaza.
+	-- Eight bases on a ring around the plaza, 45 degrees apart.
 	for i = 1, 8 do
 		local angle = math.rad((i - 1) * 45)
 		local center = Vector3.new(math.cos(angle) * 55, 0, math.sin(angle) * 55)
-		local baseFolder = Instance.new("Folder")
-		baseFolder.Name = "Base" .. i
-		baseFolder.Parent = folder
-
-		local floor = part("Floor", Vector3.new(18, 1, 18), center + Vector3.new(0, 0, 0),
-			BASE_COLORS[i], Enum.Material.SmoothPlastic)
-		floor.Parent = baseFolder
-
-		-- Low back wall so the base reads as a home zone from the plaza.
-		local back = part("BackWall", Vector3.new(18, 5, 1),
-			center + Vector3.new(-math.cos(angle) * 8.5, 2.5, -math.sin(angle) * 8.5),
-			BASE_COLORS[i], Enum.Material.SmoothPlastic)
-		back.Parent = baseFolder
-
-		-- Six slot pads in two rows of three, facing the plaza.
-		local slots = {}
-		for row = 1, 2 do
-			for col = 1, 3 do
-				local slotIndex = (row - 1) * 3 + col
-				local across = (col - 2) * 5
-				local along = (row - 1) * 5 - 2
-				local slotPos = center
-					+ Vector3.new(-math.sin(angle) * across, 0, math.cos(angle) * across)
-					+ Vector3.new(math.cos(angle) * along, 0, math.sin(angle) * along)
-				local pad = part("SlotPad" .. slotIndex, Vector3.new(4, 0.4, 4),
-					slotPos + Vector3.new(0, 0.7, 0), Color3.fromRGB(255, 255, 255),
-					Enum.Material.Neon)
-				pad.Parent = baseFolder
-				slots[slotIndex] = slotPos + Vector3.new(0, 1.5, 0)
-			end
-		end
-
-		local spawn = Instance.new("SpawnLocation")
-		spawn.Name = "Spawn" .. i
-		spawn.Anchored = true
-		spawn.Size = Vector3.new(8, 1, 8)
-		spawn.Position = center + Vector3.new(0, 0.5, 0)
-		spawn.Color = BASE_COLORS[i]
-		spawn.Material = Enum.Material.SmoothPlastic
-		spawn.TopSurface = Enum.SurfaceType.Smooth
-		spawn.BottomSurface = Enum.SurfaceType.Smooth
-		spawn.Neutral = false
-		spawn.AllowTeamChangeOnTouch = false
-		spawn.Parent = baseFolder
-
-		local signLabel = makeSignPole(baseFolder, center
-			+ Vector3.new(-math.cos(angle) * 10, 0, -math.sin(angle) * 10), "BASE " .. i)
-
-		world.bases[i] = {
-			center = center + Vector3.new(0, 0.5, 0),
-			slots = slots,
-			spawn = spawn,
-			signLabel = signLabel,
-		}
+		world.bases[i] = makeBase(folder, i, center, angle)
 	end
 
-	-- Trees and lamps for depth, kept out of the trail and the bases.
+	-- Greenery and light, kept off the trail and out of the bases.
 	for _, spot in ipairs(TREE_SPOTS) do
-		local trunk = part("Trunk", Vector3.new(1.5, 6, 1.5), spot + Vector3.new(0, 3, 0),
-			Color3.fromRGB(120, 80, 40), Enum.Material.Wood)
-		trunk.Parent = folder
-		local leaves = Instance.new("Part")
-		leaves.Name = "Leaves"
-		leaves.Shape = Enum.PartType.Ball
-		leaves.Anchored = true
-		leaves.CanCollide = false
-		leaves.Size = Vector3.new(7, 7, 7)
-		leaves.Position = spot + Vector3.new(0, 8, 0)
-		leaves.Color = Color3.fromRGB(40, 160, 60)
-		leaves.Material = Enum.Material.Grass
-		leaves.Parent = folder
+		makeTree(folder, spot)
+	end
+	for _, spot in ipairs(BUSH_SPOTS) do
+		makePart(folder, {
+			name = "Bush", size = Vector3.new(3, 3, 3),
+			pos = spot + Vector3.new(0, 1.5, 0),
+			color = Color3.fromRGB(60, 180, 80), material = Enum.Material.Grass,
+			shape = Enum.PartType.Ball, collide = false,
+		})
 	end
 	for _, spot in ipairs(LAMP_SPOTS) do
-		local pole = part("LampPole", Vector3.new(0.6, 6, 0.6), spot + Vector3.new(0, 3, 0),
-			Color3.fromRGB(60, 60, 60), Enum.Material.Metal)
-		pole.Parent = folder
-		local bulb = part("LampBulb", Vector3.new(1.6, 1.6, 1.6), spot + Vector3.new(0, 6.5, 0),
-			Color3.fromRGB(255, 240, 150), Enum.Material.Neon)
-		bulb.CanCollide = false
-		bulb.Parent = folder
+		makeLamp(folder, spot)
 	end
 
 	-- The tsunami wave: parked far below the map until a wave starts.
-	local wave = part("TsunamiWave", Vector3.new(130, 16, 5), Vector3.new(0, -40, -95),
-		Color3.fromRGB(40, 140, 255), Enum.Material.Glass)
+	local wave = makePart(folder, {
+		name = "TsunamiWave", size = Vector3.new(130, 16, 5),
+		pos = Vector3.new(0, -40, -95),
+		color = Color3.fromRGB(40, 140, 255), material = Enum.Material.Glass,
+		collide = false,
+	})
 	wave.Transparency = 0.35
-	wave.CanCollide = false
-	wave.Parent = folder
 	world.wave = wave
 
 	-- One folder holds every brainrot model, walking or owned.

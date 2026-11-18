@@ -1,4 +1,4 @@
--- Brainrot Blast: client. Draws the HUD over the 3D world, binds the E key
+-- Brainrot Blast — client. Draws the HUD over the 3D world, binds the E key
 -- with ContextActionService (so the default camera never eats it), fires the
 -- server's RemoteEvents, and shows tsunami warnings and steal alerts.
 -- No money or ownership is decided here; the server checks everything.
@@ -8,7 +8,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ContextActionService = game:GetService("ContextActionService")
 local RunService = game:GetService("RunService")
 
-local BrainrotData = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("BrainrotData"))
+local Data = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("BrainrotData"))
 local remotes = ReplicatedStorage:WaitForChild("BrainrotRemotes")
 local catchRemote = remotes:WaitForChild("CatchBrainrot")
 local stealRemote = remotes:WaitForChild("StealBrainrot")
@@ -18,36 +18,34 @@ local statsRemote = remotes:WaitForChild("Stats")
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
-
 local brainrotFolder = workspace:WaitForChild("Brainrots")
 
--- ---------- HUD ----------
+-- ---------------------------------------------------------------- HUD build
 
 local gui = Instance.new("ScreenGui")
 gui.Name = "BrainrotHud"
 gui.ResetOnSpawn = false
-gui.IgnoreGuiInset = false
 gui.Parent = playerGui
 
-local function label(name, parent, position, size, text, textSize, color)
-	local l = Instance.new("TextLabel")
-	l.Name = name
-	l.Position = position
-	l.Size = size
-	l.BackgroundTransparency = 1
-	l.Text = text
-	l.TextSize = textSize
-	l.TextColor3 = color
-	l.TextStrokeTransparency = 0.2
-	l.Font = Enum.Font.FredokaOne
-	l.Parent = parent
-	return l
+local function makeText(name, parent, pos, size, text, textSize, color, font)
+	local label = Instance.new("TextLabel")
+	label.Name = name
+	label.Position = pos
+	label.Size = size
+	label.BackgroundTransparency = 1
+	label.Text = text
+	label.TextSize = textSize
+	label.TextColor3 = color
+	label.TextStrokeTransparency = 0.2
+	label.Font = font or Enum.Font.FredokaOne
+	label.Parent = parent
+	return label
 end
 
-local function button(name, parent, position, size, text, color)
+local function makeButton(name, parent, pos, size, text, color)
 	local b = Instance.new("TextButton")
 	b.Name = name
-	b.Position = position
+	b.Position = pos
 	b.Size = size
 	b.BackgroundColor3 = color
 	b.BorderSizePixel = 0
@@ -63,7 +61,7 @@ local function button(name, parent, position, size, text, color)
 	return b
 end
 
--- Top bar, centred so the top-left Roblox menu buttons never cover it.
+-- Top bar, centred, so the Roblox menu buttons in the top-left never cover it.
 local topBar = Instance.new("Frame")
 topBar.Name = "TopBar"
 topBar.AnchorPoint = Vector2.new(0.5, 0)
@@ -77,43 +75,46 @@ local topCorner = Instance.new("UICorner")
 topCorner.CornerRadius = UDim.new(0, 12)
 topCorner.Parent = topBar
 
-label("Title", topBar, UDim2.fromOffset(10, 2), UDim2.fromOffset(540, 24),
+makeText("Title", topBar, UDim2.fromOffset(10, 2), UDim2.fromOffset(540, 24),
 	"BRAINROT BLAST", 22, Color3.fromRGB(255, 230, 90))
-local cashLabel = label("CashLabel", topBar, UDim2.fromOffset(10, 28), UDim2.fromOffset(260, 30),
-	"Cash: $100", 20, Color3.fromRGB(140, 255, 140))
-local rateLabel = label("RateLabel", topBar, UDim2.fromOffset(280, 28), UDim2.fromOffset(270, 30),
-	"$0/detik  |  0 brainrot", 20, Color3.fromRGB(255, 255, 255))
-local rebirthLabel = label("RebirthLabel", topBar, UDim2.fromOffset(10, 52), UDim2.fromOffset(540, 12),
-	"Rebirth: 0  (x1.0)  -  butuh $10000", 12, Color3.fromRGB(200, 200, 255))
-rebirthLabel.Font = Enum.Font.SourceSansBold
+local cashLabel = makeText("CashLabel", topBar, UDim2.fromOffset(10, 28),
+	UDim2.fromOffset(260, 30), "Cash: $100", 20, Color3.fromRGB(140, 255, 140))
+local rateLabel = makeText("RateLabel", topBar, UDim2.fromOffset(280, 28),
+	UDim2.fromOffset(270, 30), "$0/detik  |  0 brainrot", 20,
+	Color3.fromRGB(255, 255, 255))
+local rebirthLabel = makeText("RebirthLabel", topBar, UDim2.fromOffset(10, 52),
+	UDim2.fromOffset(540, 12), "Rebirth: 0  (x1.0)  -  butuh $10000", 12,
+	Color3.fromRGB(200, 200, 255), Enum.Font.SourceSansBold)
 
--- Tsunami banner, hidden until the server warns.
-local tsunamiBanner = label("TsunamiBanner", gui, UDim2.new(0.5, 0, 0, 84),
+-- Tsunami banner, hidden until the server warns us.
+local tsunamiBanner = makeText("TsunamiBanner", gui, UDim2.new(0.5, 0, 0, 84),
 	UDim2.fromOffset(560, 48), "", 26, Color3.fromRGB(255, 80, 80))
 tsunamiBanner.AnchorPoint = Vector2.new(0.5, 0)
 tsunamiBanner.BackgroundColor3 = Color3.fromRGB(60, 0, 0)
 tsunamiBanner.BackgroundTransparency = 0.2
 tsunamiBanner.Visible = false
 
--- One-line alert in the middle of the screen, auto-hides.
-local alertLabel = label("AlertLabel", gui, UDim2.new(0.5, 0, 0.42, 0),
+-- One-line alert in the middle of the screen; it hides itself after a while.
+local alertLabel = makeText("AlertLabel", gui, UDim2.new(0.5, 0, 0.42, 0),
 	UDim2.fromOffset(560, 34), "", 22, Color3.fromRGB(255, 255, 255))
 alertLabel.AnchorPoint = Vector2.new(0.5, 0)
 alertLabel.BackgroundColor3 = Color3.fromRGB(20, 20, 40)
 alertLabel.BackgroundTransparency = 0.35
 alertLabel.Visible = false
 
--- Catch / steal prompt above the bottom of the screen.
-local promptLabel = label("PromptLabel", gui, UDim2.new(0.5, 0, 1, -120),
+-- Catch / steal hint just above the bottom of the screen.
+local promptLabel = makeText("PromptLabel", gui, UDim2.new(0.5, 0, 1, -120),
 	UDim2.fromOffset(560, 30), "", 20, Color3.fromRGB(255, 240, 150))
 promptLabel.AnchorPoint = Vector2.new(0.5, 0)
 promptLabel.Visible = false
 
--- Buttons: Activated fires for mouse and touch alike.
-local rebirthButton = button("RebirthButton", gui, UDim2.new(1, -190, 0.5, -30),
-	UDim2.fromOffset(170, 56), "REBIRTH", Color3.fromRGB(150, 60, 220))
-local stealButton = button("StealButton", gui, UDim2.new(1, -190, 0.5, 36),
-	UDim2.fromOffset(170, 56), "CURI (E)", Color3.fromRGB(220, 60, 60))
+-- Buttons: Activated fires for a mouse click and for a touch tap alike.
+local rebirthButton = makeButton("RebirthButton", gui,
+	UDim2.new(1, -190, 0.5, -30), UDim2.fromOffset(170, 56),
+	"REBIRTH", Color3.fromRGB(150, 60, 220))
+local stealButton = makeButton("StealButton", gui,
+	UDim2.new(1, -190, 0.5, 36), UDim2.fromOffset(170, 56),
+	"CURI (E)", Color3.fromRGB(220, 60, 60))
 
 local alertHideAt = 0
 local function showAlert(text, seconds)
@@ -122,16 +123,21 @@ local function showAlert(text, seconds)
 	alertHideAt = os.clock() + (seconds or 4)
 end
 
--- ---------- Finding the nearest brainrot ----------
+-- ------------------------------------------------------- finding brainrots
 
-local function nearestBrainrot(maxDistance, wantState)
+local function myRoot()
 	local character = player.Character
 	if not character then
-		return nil, nil
+		return nil
 	end
-	local root = character:FindFirstChild("HumanoidRootPart")
+	return character:FindFirstChild("HumanoidRootPart")
+end
+
+-- The closest model in the wanted state, within maxDistance studs.
+local function closestModel(maxDistance, wantState)
+	local root = myRoot()
 	if not root then
-		return nil, nil
+		return nil
 	end
 	local best, bestDistance = nil, maxDistance
 	for _, model in ipairs(brainrotFolder:GetChildren()) do
@@ -145,19 +151,15 @@ local function nearestBrainrot(maxDistance, wantState)
 			end
 		end
 	end
-	return best, bestDistance
+	return best
 end
 
-local function nearestStealable()
-	local character = player.Character
-	if not character then
-		return nil
-	end
-	local root = character:FindFirstChild("HumanoidRootPart")
+local function closestStealable()
+	local root = myRoot()
 	if not root then
 		return nil
 	end
-	local best, bestDistance = nil, BrainrotData.STEAL_RANGE + 2
+	local best, bestDistance = nil, Data.STEAL_RANGE + 2
 	for _, model in ipairs(brainrotFolder:GetChildren()) do
 		if model:IsA("Model") and model:GetAttribute("State") == "owned"
 			and model:GetAttribute("Owner") ~= player.Name then
@@ -173,15 +175,16 @@ local function nearestStealable()
 	return best
 end
 
--- ---------- Actions ----------
+-- ---------------------------------------------------------------- actions
 
+-- E does the obvious thing: catch a walker nearby, else steal from a base.
 local function doInteract()
-	local walking = nearestBrainrot(BrainrotData.CATCH_RANGE + 2, "walking")
+	local walking = closestModel(Data.CATCH_RANGE + 2, "walking")
 	if walking then
 		catchRemote:FireServer(walking:GetAttribute("BrainrotId"))
 		return
 	end
-	local stealable = nearestStealable()
+	local stealable = closestStealable()
 	if stealable then
 		stealRemote:FireServer(stealable:GetAttribute("BrainrotId"))
 	end
@@ -200,7 +203,7 @@ rebirthButton.Activated:Connect(function()
 end)
 
 stealButton.Activated:Connect(function()
-	local stealable = nearestStealable()
+	local stealable = closestStealable()
 	if stealable then
 		stealRemote:FireServer(stealable:GetAttribute("BrainrotId"))
 	else
@@ -208,13 +211,13 @@ stealButton.Activated:Connect(function()
 	end
 end)
 
--- ---------- Server messages ----------
+-- --------------------------------------------------------- server messages
 
 notifyRemote.OnClientEvent:Connect(function(kind, text)
 	if kind == "tsunami" then
 		tsunamiBanner.Text = text
 		tsunamiBanner.Visible = true
-		task.delay(BrainrotData.TSUNAMI_WARN_SECONDS + 8, function()
+		task.delay(Data.TSUNAMI_WARN + 8, function()
 			tsunamiBanner.Visible = false
 		end)
 	elseif kind == "alert" then
@@ -231,21 +234,21 @@ statsRemote.OnClientEvent:Connect(function(cash, rate, count, rebirths, mult, re
 		.. ")  -  butuh $" .. tostring(rebirthNeeded)
 end)
 
--- ---------- Prompt + alert housekeeping ----------
+-- ------------------------------------------- prompt + alert housekeeping
 
 RunService.RenderStepped:Connect(function()
 	if os.clock() >= alertHideAt then
 		alertLabel.Visible = false
 	end
-	local walking = nearestBrainrot(BrainrotData.CATCH_RANGE + 2, "walking")
+	local walking = closestModel(Data.CATCH_RANGE + 2, "walking")
 	if walking then
-		local name = walking.Name
 		local price = walking:GetAttribute("Price") or 0
-		promptLabel.Text = "Tekan E / ketuk untuk tangkap " .. name .. "  ($" .. tostring(price) .. ")"
+		promptLabel.Text = "Tekan E / ketuk untuk tangkap " .. walking.Name
+			.. "  ($" .. tostring(price) .. ")"
 		promptLabel.Visible = true
 		return
 	end
-	local stealable = nearestStealable()
+	local stealable = closestStealable()
 	if stealable then
 		local owner = stealable:GetAttribute("Owner") or "?"
 		promptLabel.Text = "Tekan E / CURI untuk mencuri dari " .. owner .. "!"
